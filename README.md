@@ -1,4 +1,4 @@
-# Clownfish RISC-V v2 TURBO - Out-of-Order Superscalar Processor
+# Clownfish RISC-V Microarchitecture - Out-of-Order Superscalar Processor
 
 An aggressive, ultra-high-performance out-of-order RISC-V processor implemented on the open-source SkyWater Sky130 130nm PDK. Successfully synthesized, placed, and generated 165MB GDSII layout demonstrating physical manufacturability.
 
