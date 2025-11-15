@@ -1,0 +1,190 @@
+================================================================================
+CLOWNFISH RISC-V v2 - MICROARCHITECTURE BLOCK DIAGRAM
+================================================================================
+14-Stage Out-of-Order Superscalar Processor
+Target: 1.0 GHz @ Sky130 130nm
+ISA: RV32GCBV (Integer, Compressed, Multiply, Atomic, Float, Vector, Bitmanip)
+================================================================================
+
+                                CLOWNFISH CORE v2
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │                         FRONTEND (In-Order)                         │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │                                                                     │
+    │  ┌──────────────┐      ┌─────────────────────────────────────┐   │
+    │  │   PC GEN     │──────│    INSTRUCTION CACHE (L1-I)         │   │
+    │  │              │      │  - 16KB, 4-way set-associative      │   │
+    │  │ - Next PC    │      │  - 64B cache lines                  │   │
+    │  │ - BTB lookup │      │  - Virtual address indexed          │   │
+    │  │ - Predictor  │      │  - OpenRAM SRAM macro (128×256)     │   │
+    │  └──────┬───────┘      └──────────────┬──────────────────────┘   │
+    │         │                               │                          │
+    │         └───────────┬───────────────────┘                          │
+    │                     ▼                                              │
+    │  ┌──────────────────────────────────────────────────────────┐    │
+    │  │           BRANCH PREDICTION UNIT                         │    │
+    │  │  ┌────────────────┐  ┌────────────────┐  ┌────────────┐ │    │
+    │  │  │ GShare (2K)    │  │ Bimodal (2K)   │  │ Tournament │ │    │
+    │  │  │ - 11-bit GHR   │  │ - 2-bit cntr   │  │ Selector   │ │    │
+    │  │  └────────────────┘  └────────────────┘  └────────────┘ │    │
+    │  │  ┌────────────────┐  ┌─────────────────────────────────┐│    │
+    │  │  │ BTB (512-entry)│  │ RAS (16-entry, 32-bit addrs)    ││    │
+    │  │  │ - 4-way assoc  │  │ - Function call/return tracking ││    │
+    │  │  └────────────────┘  └─────────────────────────────────┘│    │
+    │  └──────────────────────────────────────────────────────────┘    │
+    │                     │                                              │
+    │                     ▼                                              │
+    │  ┌─────────────────────────────────────────────────────────────┐ │
+    │  │                  FETCH STAGE (F1, F2)                       │ │
+    │  │  - Fetch up to 4 instructions per cycle                     │ │
+    │  │  - Instruction alignment and buffering                      │ │
+    │  │  - Branch prediction snapshot capture                       │ │
+    │  └──────────────────────┬──────────────────────────────────────┘ │
+    │                         ▼                                          │
+    │  ┌─────────────────────────────────────────────────────────────┐ │
+    │  │                  DECODE STAGE (D1, D2)                      │ │
+    │  │  - RV32GCBV instruction decode (4-wide)                     │ │
+    │  │  - Immediate generation                                     │ │
+    │  │  - Microcode for complex ops (vector, FP)                   │ │
+    │  │  - Pre-decode for instruction queue                         │ │
+    │  └──────────────────────┬──────────────────────────────────────┘ │
+    │                         │                                          │
+    └─────────────────────────┼──────────────────────────────────────────┘
+                              │
+    ┌─────────────────────────┼──────────────────────────────────────────┐
+    │                         ▼             BACKEND (Out-of-Order)       │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │                                                                     │
+    │  ┌─────────────────────────────────────────────────────────────┐ │
+    │  │            INSTRUCTION QUEUE (64 entries)                   │ │
+    │  │  - Buffers decoded instructions                             │ │
+    │  │  - Holds PC, instruction bits, immediate, history           │ │
+    │  │  - 4 read ports, 4 write ports                              │ │
+    │  └──────────────────────┬──────────────────────────────────────┘ │
+    │                         ▼                                          │
+    │  ┌─────────────────────────────────────────────────────────────┐ │
+    │  │          REGISTER RENAME (RAT + Free List)                  │ │
+    │  │  - 32 architectural → 128 physical registers                │ │
+    │  │  - Rename up to 4 instructions/cycle                        │ │
+    │  │  - WAW/WAR hazard elimination                               │ │
+    │  │  - Free list: 96 entries (128 - 32 committed)               │ │
+    │  └──────────────────────┬──────────────────────────────────────┘ │
+    │                         ▼                                          │
+    │  ┌─────────────────────────────────────────────────────────────┐ │
+    │  │         RESERVATION STATION (64 entries)                    │ │
+    │  │  - Unified station for all execution units                  │ │
+    │  │  - Wake-up and select logic                                 │ │
+    │  │  - Issue up to 4 instructions/cycle                         │ │
+    │  │  - Age-based priority for fairness                          │ │
+    │  └────┬──────┬──────┬──────┬──────┬──────┬──────┬─────────────┘ │
+    │       │      │      │      │      │      │      │                │
+    │       ▼      ▼      ▼      ▼      ▼      ▼      ▼                │
+    │  ┌────────────────────────────────────────────────────────────┐ │
+    │  │              EXECUTION UNITS (7 types)                     │ │
+    │  │                                                            │ │
+    │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │ │
+    │  │  │Simple ALU│  │Simple ALU│  │Complex   │  │  Mul/Div │ │ │
+    │  │  │  (2x)    │  │  (2x)    │  │   ALU    │  │   Unit   │ │ │
+    │  │  │ ADD,SUB  │  │ ADD,SUB  │  │ SHIFTS   │  │ MUL/DIV/ │ │ │
+    │  │  │ LOGIC    │  │ LOGIC    │  │ BITMANIP │  │ REM      │ │ │
+    │  │  │ 1-cycle  │  │ 1-cycle  │  │ 1-cycle  │  │ 3-33 cyc │ │ │
+    │  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │ │
+    │  │                                                            │ │
+    │  │  ┌──────────┐  ┌──────────┐  ┌──────────────────────────┐│ │
+    │  │  │   FPU    │  │ Vector   │  │    Load/Store Unit       ││ │
+    │  │  │  Unit    │  │  Unit    │  │  - AGU (address gen)     ││ │
+    │  │  │ FADD,MUL │  │ RVV 1.0  │  │  - Store buffer (16)     ││ │
+    │  │  │ FDIV,SQRT│  │ VLEN=128 │  │  - Load queue (16)       ││ │
+    │  │  │ 4-16 cyc │  │ ELEN=32  │  │  - D-cache interface     ││ │
+    │  │  └──────────┘  └──────────┘  └───────────┬──────────────┘│ │
+    │  │                                           │                │ │
+    │  └───────────────────────────────────────────┼────────────────┘ │
+    │                         │                    │                  │
+    │                         ▼                    ▼                  │
+    │  ┌─────────────────────────────────────────────────────────────┐ │
+    │  │              REORDER BUFFER (64 entries)                    │ │
+    │  │  - In-order commit of up to 4 instructions/cycle            │ │
+    │  │  - Exception handling and precise state                     │ │
+    │  │  - Misprediction recovery                                   │ │
+    │  │  - Retirement of completed instructions                     │ │
+    │  └──────────────────────┬──────────────────────────────────────┘ │
+    │                         │                                          │
+    └─────────────────────────┼──────────────────────────────────────────┘
+                              │
+    ┌─────────────────────────┼──────────────────────────────────────────┐
+    │                         ▼        MEMORY SUBSYSTEM                  │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │                                                                     │
+    │  ┌─────────────────────────────────────────────────────────────┐ │
+    │  │         DATA CACHE (L1-D) - 32KB, 4-way                     │ │
+    │  │  - Write-back, write-allocate                               │ │
+    │  │  - 64B cache lines                                          │ │
+    │  │  - OpenRAM SRAM macro (256×256)                             │ │
+    │  │  - VIPT (Virtual Index, Physical Tag)                       │ │
+    │  └──────────────────────┬──────────────────────────────────────┘ │
+    │                         │                                          │
+    │  ┌─────────────────────────────────────────────────────────────┐ │
+    │  │         TLB (Translation Lookaside Buffer)                  │ │
+    │  │  - 32 entries, fully associative                            │ │
+    │  │  - Separate I-TLB and D-TLB                                 │ │
+    │  │  - OpenRAM SRAM macro (32×64)                               │ │
+    │  │  - Hardware page table walker                               │ │
+    │  └──────────────────────┬──────────────────────────────────────┘ │
+    │                         │                                          │
+    │  ┌─────────────────────────────────────────────────────────────┐ │
+    │  │      UNIFIED L2 CACHE - 256KB, 8-way                        │ │
+    │  │  - Inclusive of L1-I and L1-D                               │ │
+    │  │  - Write-back policy                                        │ │
+    │  │  - 64B cache lines                                          │ │
+    │  │  - OpenRAM SRAM macro (512×512)                             │ │
+    │  │  - Victim cache for evictions                               │ │
+    │  └──────────────────────┬──────────────────────────────────────┘ │
+    │                         │                                          │
+    │                         ▼                                          │
+    │  ┌─────────────────────────────────────────────────────────────┐ │
+    │  │              SYSTEM BUS INTERFACE                           │ │
+    │  │  - AXI4 master interface                                    │ │
+    │  │  - 32-bit address, 32-bit data                              │ │
+    │  │  - Support for burst transfers                              │ │
+    │  └─────────────────────────────────────────────────────────────┘ │
+    │                                                                     │
+    └─────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+KEY FEATURES:
+================================================================================
+• 4-wide superscalar: Fetch, decode, issue, and commit 4 instructions/cycle
+• Out-of-order execution: 64-entry ROB, 64-entry reservation station
+• Register renaming: 32 arch → 128 physical registers (Tomasulo-style)
+• Advanced branch prediction: Tournament predictor (GShare + Bimodal)
+• Memory hierarchy: 16KB L1-I, 32KB L1-D, 256KB L2 unified
+• RISC-V extensions: G (base), C (compressed), B (bitmanip), V (vector)
+• Target frequency: 1.0 GHz @ Sky130 130nm (4mm × 4mm die)
+• Total gates: ~2M (including caches and prediction structures)
+
+================================================================================
+PHYSICAL IMPLEMENTATION:
+================================================================================
+• Technology: SkyWater Sky130 130nm PDK (5 metal layers)
+• Standard cells: sky130_fd_sc_hd (high-density library)
+• SRAM macros: OpenRAM-generated (4 types, mixed pin layers met3/met4)
+• Die size: 4mm × 4mm (16 mm²)
+• Target density: 60% (to allow routing with 5 metal layers)
+• Clock tree: H-tree with sky130_fd_sc_hd__clkbuf_16 buffers
+• Power domains: Single VDD (1.8V nominal)
+
+================================================================================
+PERFORMANCE ESTIMATES:
+================================================================================
+• Peak IPC: 4.0 (4-wide issue)
+• Sustained IPC: 1.5-2.5 (typical workloads with branch mispredictions)
+• Branch misprediction penalty: ~14 cycles (full pipeline flush)
+• L1 cache hit latency: 2 cycles (I-cache), 3 cycles (D-cache)
+• L2 cache hit latency: 12 cycles
+• Memory access latency: 100+ cycles (off-chip DRAM)
+
+================================================================================
+AUTHOR: Miyamii (Clownfish Architecture Project)
+DATE: November 2025
+VERSION: v2.0 (Out-of-Order Implementation)
+================================================================================

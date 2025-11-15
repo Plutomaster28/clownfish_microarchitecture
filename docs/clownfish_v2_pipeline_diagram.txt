@@ -1,0 +1,421 @@
+================================================================================
+CLOWNFISH RISC-V v2 - 14-STAGE PIPELINE DIAGRAM
+================================================================================
+Out-of-Order Superscalar Pipeline with 4-wide Issue
+Target: 1.0 GHz @ Sky130 130nm
+================================================================================
+
+                          PIPELINE STAGE OVERVIEW
+    ┌────────────────────────────────────────────────────────────────┐
+    │                    IN-ORDER FRONTEND                           │
+    │  ┌────┐  ┌────┐  ┌────┐  ┌────┐                               │
+    │  │ F1 │─▶│ F2 │─▶│ D1 │─▶│ D2 │                               │
+    │  └────┘  └────┘  └────┘  └────┘                               │
+    │                      │                                          │
+    └──────────────────────┼──────────────────────────────────────────┘
+                           ▼
+    ┌────────────────────────────────────────────────────────────────┐
+    │               OUT-OF-ORDER BACKEND                             │
+    │  ┌────┐  ┌────┐  ┌────┐  ┌────┐  ┌────┐  ┌────┐  ┌────┐     │
+    │  │ RN │─▶│ DS │─▶│ IS │─▶│ RF │─▶│ EX │─▶│ WB │─▶│ CM │     │
+    │  └────┘  └────┘  └────┘  └────┘  └────┘  └────┘  └────┘     │
+    │                                                                 │
+    └─────────────────────────────────────────────────────────────────┘
+
+================================================================================
+DETAILED PIPELINE STAGES
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STAGE 1: FETCH 1 (F1) - PC Generation & Branch Prediction              │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Cycle: 1                                                                │
+│ Description:                                                            │
+│   • Generate next PC (sequential, branch target, or exception vector)  │
+│   • Access BTB for branch target prediction                            │
+│   • Query branch predictors (GShare + Bimodal)                         │
+│   • Select prediction using tournament selector                        │
+│   • Push/pop RAS for call/return instructions                          │
+│   • Send fetch request to I-cache                                      │
+│                                                                         │
+│ Outputs: Next PC, predicted taken/not-taken, target address            │
+│ Width: 4 instructions (fetch bundle)                                   │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STAGE 2: FETCH 2 (F2) - Instruction Cache Access                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Cycle: 2                                                                │
+│ Description:                                                            │
+│   • I-cache read (16KB, 4-way set-associative)                         │
+│   • TLB lookup for virtual→physical address translation                │
+│   • Fetch up to 4 instructions from cache line                         │
+│   • Handle cache misses (stall pipeline, send L2 request)              │
+│   • Instruction alignment and bundling                                 │
+│   • Capture branch prediction snapshot (GHR, RAS TOS)                  │
+│                                                                         │
+│ Outputs: 4 raw instructions + PC + prediction info                     │
+│ Stalls: I-cache miss (~12 cycles for L2 hit, 100+ for memory)          │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STAGE 3: DECODE 1 (D1) - Instruction Decode                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Cycle: 3                                                                │
+│ Description:                                                            │
+│   • Decode up to 4 RV32GCBV instructions in parallel                   │
+│   • Identify opcode, funct3, funct7 fields                             │
+│   • Extract source registers (rs1, rs2, rs3 for FP/Vector)             │
+│   • Extract destination register (rd)                                  │
+│   • Generate immediate values (I/S/B/U/J formats)                      │
+│   • Determine execution unit type (ALU, MUL, FPU, LSU, etc.)           │
+│   • Detect compressed instructions (RVC) and expand to 32-bit          │
+│                                                                         │
+│ Outputs: Decoded microops + source/dest regs + immediate               │
+│ Width: 4 instructions                                                   │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STAGE 4: DECODE 2 (D2) - Microcode & Instruction Queue                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Cycle: 4                                                                │
+│ Description:                                                            │
+│   • Microcode expansion for complex instructions (vector, FP div/sqrt) │
+│   • Split vector instructions into multiple microops                   │
+│   • Generate control signals for each execution unit                   │
+│   • Insert instructions into Instruction Queue (IQ) - 64 entries       │
+│   • Check for IQ full condition (stall frontend if full)               │
+│   • Preserve PC and prediction info for recovery                       │
+│                                                                         │
+│ Outputs: Microops in IQ ready for rename                               │
+│ Stalls: IQ full (backend pressure)                                     │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌═════════════════════════════════════════════════════════════════════════┐
+║                   OUT-OF-ORDER EXECUTION BEGINS                         ║
+└═════════════════════════════════════════════════════════════════════════┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STAGE 5: REGISTER RENAME (RN) - RAT & Physical Register Allocation     │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Cycle: 5                                                                │
+│ Description:                                                            │
+│   • Read Register Alias Table (RAT) for source registers               │
+│   • Map architectural registers (x0-x31) to physical (p0-p127)         │
+│   • Allocate new physical register for destination from Free List      │
+│   • Update RAT with new mapping                                        │
+│   • Eliminate WAW and WAR hazards through renaming                     │
+│   • Handle up to 4 renames per cycle                                   │
+│   • Save old physical register mapping for recovery                    │
+│                                                                         │
+│ Resources:                                                              │
+│   • RAT: 32 entries (arch regs) → 128 physical regs                    │
+│   • Free List: 96 entries (128 total - 32 committed)                   │
+│   • Rename width: 4 instructions/cycle                                 │
+│                                                                         │
+│ Outputs: Renamed instruction with physical register IDs                │
+│ Stalls: Free list empty (no physical registers available)              │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STAGE 6: DISPATCH (DS) - Reservation Station Allocation                │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Cycle: 6                                                                │
+│ Description:                                                            │
+│   • Allocate entry in unified Reservation Station (64 entries)         │
+│   • Insert instruction with source operand tags                        │
+│   • Mark operands as ready or waiting                                  │
+│   • Check if source physical registers have valid data                 │
+│   • Allocate ROB entry (in-order allocation)                           │
+│   • Link RS entry to ROB entry                                         │
+│   • Dispatch up to 4 instructions per cycle                            │
+│                                                                         │
+│ Resources:                                                              │
+│   • Reservation Station: 64 entries, unified for all EUs               │
+│   • Reorder Buffer: 64 entries (in-order head/tail pointers)           │
+│   • Dispatch width: 4 instructions/cycle                               │
+│                                                                         │
+│ Outputs: Instruction in RS waiting for operands                        │
+│ Stalls: RS full OR ROB full                                            │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STAGE 7: ISSUE (IS) - Wake-up & Select Logic                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Cycle: 7+ (instructions wait here until operands ready)                │
+│ Description:                                                            │
+│   • Wait for source operands to become ready                           │
+│   • Monitor result bus (bypass network) for completing instructions    │
+│   • Wake up instructions when operands broadcast                       │
+│   • Select ready instructions for execution (age-based priority)       │
+│   • Issue up to 4 instructions to available execution units            │
+│   • Handle structural hazards (multiple ready → same EU)               │
+│                                                                         │
+│ Selection Priority:                                                     │
+│   1. Age (oldest ready instruction first)                              │
+│   2. Execution unit availability                                       │
+│   3. Load/store ordering constraints                                   │
+│                                                                         │
+│ Resources:                                                              │
+│   • Issue width: 4 instructions/cycle (max)                            │
+│   • Execution units: 7 types (2×Simple ALU, Complex ALU, MUL/DIV,     │
+│                                FPU, Vector, LSU)                        │
+│                                                                         │
+│ Outputs: Instructions issued to execution units                        │
+│ Stalls: Operands not ready, EU busy, LSU address conflict              │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STAGE 8: REGISTER FILE READ (RF)                                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Cycle: 8                                                                │
+│ Description:                                                            │
+│   • Read source operands from Physical Register File (PRF)             │
+│   • PRF has 128 entries (32-bit each)                                  │
+│   • 12 read ports (3 sources × 4 instructions)                         │
+│   • Bypass forwarding from result bus if data just produced            │
+│   • Send operands + control signals to execution unit                  │
+│                                                                         │
+│ Resources:                                                              │
+│   • Physical Register File: 128×32-bit registers                       │
+│   • Read ports: 12 (supports 4-wide issue, 3 sources each)             │
+│   • Write ports: 4 (from execution units)                              │
+│   • Bypass network: Direct forwarding from EX→RF                       │
+│                                                                         │
+│ Outputs: Operands ready for execution                                  │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STAGE 9-10: EXECUTE (EX) - Execution Units                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Cycles: 9-10+ (variable latency per EU)                                │
+│                                                                         │
+│ ┌─────────────────────────────────────────────────────────────────┐   │
+│ │ EXECUTION UNIT TYPES & LATENCIES:                                │   │
+│ ├─────────────────────────────────────────────────────────────────┤   │
+│ │ 1. Simple ALU (×2) - 1 cycle                                    │   │
+│ │    • ADD, SUB, AND, OR, XOR, SLT, SLTU                          │   │
+│ │    • Used for address generation, basic integer ops             │   │
+│ │                                                                  │   │
+│ │ 2. Complex ALU - 1 cycle                                        │   │
+│ │    • Shifts: SLL, SRL, SRA (barrel shifter)                     │   │
+│ │    • Bitmanip: ANDN, ORN, XNOR, CLZ, CTZ, CPOP, etc.           │   │
+│ │    • Rotate, bit extract/deposit                                │   │
+│ │                                                                  │   │
+│ │ 3. Multiply/Divide Unit - 3-33 cycles                           │   │
+│ │    • MUL, MULH, MULHSU, MULHU - 3 cycles (pipelined)            │   │
+│ │    • DIV, DIVU - 33 cycles (iterative, non-pipelined)           │   │
+│ │    • REM, REMU - 33 cycles (iterative)                          │   │
+│ │                                                                  │   │
+│ │ 4. FPU Unit - 4-16 cycles                                       │   │
+│ │    • FADD, FSUB - 4 cycles                                      │   │
+│ │    • FMUL - 5 cycles                                            │   │
+│ │    • FDIV - 12 cycles                                           │   │
+│ │    • FSQRT - 16 cycles                                          │   │
+│ │    • FMADD/FMSUB/FNMADD/FNMSUB - 6 cycles                       │   │
+│ │    • Supports single-precision (F extension)                    │   │
+│ │                                                                  │   │
+│ │ 5. Vector Unit - 1-N cycles (depends on VLEN)                   │   │
+│ │    • RVV 1.0 compliant, VLEN=128, ELEN=32                       │   │
+│ │    • Vector arithmetic, load/store, permute                     │   │
+│ │    • Pipelined for throughput (1 element/cycle after startup)   │   │
+│ │                                                                  │   │
+│ │ 6. Load/Store Unit (LSU) - 3+ cycles                            │   │
+│ │    • Address generation (AGU) - 1 cycle                         │   │
+│ │    • D-cache access - 2 cycles (hit)                            │   │
+│ │    • Store buffer: 16 entries                                   │   │
+│ │    • Load queue: 16 entries                                     │   │
+│ │    • Memory disambiguation & forwarding                         │   │
+│ │    • L2 access on miss - +12 cycles                             │   │
+│ │                                                                  │   │
+│ │ 7. Branch Unit (integrated with Simple ALU)                     │   │
+│ │    • Branch condition evaluation - 1 cycle                      │   │
+│ │    • Target address calculation - 1 cycle                       │   │
+│ │    • Comparison with prediction                                 │   │
+│ │    • Misprediction triggers pipeline flush                      │   │
+│ └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│ Outputs: Execution results + valid bit                                 │
+│ Broadcast: Results sent to bypass network & ROB                        │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STAGE 11-12: WRITEBACK (WB) - Result Broadcast                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Cycles: 11-12+ (depends on EX latency)                                 │
+│ Description:                                                            │
+│   • Write result to Physical Register File                             │
+│   • Broadcast result on bypass network (wakes waiting instructions)    │
+│   • Update ROB entry with result and valid bit                         │
+│   • Mark instruction as executed in ROB                                │
+│   • Handle exceptions detected during execution                        │
+│                                                                         │
+│ Resources:                                                              │
+│   • Writeback ports: 4 (one per issued instruction max)                │
+│   • Bypass network: Connects all EUs to RF read stage                  │
+│   • ROB update: Mark entry complete                                    │
+│                                                                         │
+│ Outputs: Updated PRF, ROB marked complete                              │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌═════════════════════════════════════════════════════════════════════════┐
+║                   IN-ORDER COMMIT STAGE                                 ║
+└═════════════════════════════════════════════════════════════════════════┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STAGE 13-14: COMMIT (CM) - Retirement & Architectural State Update     │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Cycles: 13-14                                                           │
+│ Description:                                                            │
+│   • Check ROB head for completed instructions (in-order commit)        │
+│   • Commit up to 4 instructions per cycle                              │
+│   • Update architectural register file (commit physical→arch mapping)  │
+│   • Return old physical register to Free List                          │
+│   • Update branch predictor on commit (train GShare/Bimodal/Selector)  │
+│   • Drain stores from store buffer to memory                           │
+│   • Handle exceptions and interrupts (precise state)                   │
+│   • Flush pipeline on misprediction or exception                       │
+│                                                                         │
+│ Commit Conditions:                                                      │
+│   ✓ Instruction at ROB head                                            │
+│   ✓ Execution completed (result valid)                                 │
+│   ✓ No exceptions detected                                             │
+│   ✓ All prior instructions committed (in-order)                        │
+│                                                                         │
+│ Exception Handling:                                                     │
+│   • Flush pipeline on exception (discard speculative state)            │
+│   • Restore RAT to committed state                                     │
+│   • Redirect PC to exception handler                                   │
+│   • Preserve precise exception state in CSRs                           │
+│                                                                         │
+│ Branch Misprediction Recovery:                                          │
+│   • Flush pipeline stages F1-WB                                        │
+│   • Discard instructions after mispredicted branch in ROB              │
+│   • Restore RAT and Free List to branch snapshot                       │
+│   • Restore GHR to correct value                                       │
+│   • Redirect PC to correct target                                      │
+│   • Update branch predictor with correct outcome                       │
+│   • Penalty: ~14 cycles (full pipeline depth)                          │
+│                                                                         │
+│ Resources:                                                              │
+│   • Commit width: 4 instructions/cycle                                 │
+│   • ROB retirement: In-order, head pointer increment                   │
+│                                                                         │
+│ Outputs: Architectural state updated, instructions retired             │
+└─────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+PIPELINE CONTROL & HAZARDS
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ STRUCTURAL HAZARDS                                                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│ • IQ Full: Frontend stalls when Instruction Queue at capacity (64)     │
+│ • RS Full: Dispatch stalls when Reservation Station full (64 entries)  │
+│ • ROB Full: Dispatch stalls when Reorder Buffer full (64 entries)      │
+│ • Free List Empty: Rename stalls (no physical registers available)     │
+│ • EU Busy: Issue stalls if target execution unit not available         │
+│ • LSU Conflict: Store buffer or load queue full                        │
+│                                                                         │
+│ Resolution: Backpressure stalls earlier stages until resource free      │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ DATA HAZARDS (Eliminated by Out-of-Order Execution)                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│ • RAW (Read After Write): Handled by RS wait-for-operands              │
+│ • WAR (Write After Read): Eliminated by register renaming              │
+│ • WAW (Write After Write): Eliminated by register renaming             │
+│                                                                         │
+│ Bypass Network: Forwards results from EX→RF to avoid PRF read delays   │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ CONTROL HAZARDS (Branch Misprediction)                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│ • Prediction: Made in F1 stage (tournament predictor)                  │
+│ • Resolution: Branch outcome known in EX stage (cycle 9)               │
+│ • Misprediction: Detected by comparing predicted vs actual             │
+│ • Recovery: Pipeline flush (F1-WB), PC redirect, ~14 cycle penalty     │
+│ • Prediction Accuracy: ~90-95% (tournament predictor)                  │
+│                                                                         │
+│ Misprediction Cost:                                                     │
+│   Flush: All in-flight instructions after branch                       │
+│   Penalty: 14 cycles (pipeline depth) + refill time                    │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ MEMORY HAZARDS                                                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│ • Load/Store Ordering: LSU enforces memory consistency                 │
+│ • Store-to-Load Forwarding: Store buffer forwards to younger loads     │
+│ • Memory Disambiguation: Address comparison for load/store hazards     │
+│ • Cache Coherence: Not implemented (single-core design)                │
+│                                                                         │
+│ Handling:                                                               │
+│   - Store buffer: Holds stores until commit (16 entries)               │
+│   - Load queue: Tracks in-flight loads (16 entries)                    │
+│   - Address matching: Detects load-store conflicts                     │
+└─────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+PERFORMANCE CHARACTERISTICS
+================================================================================
+
+Pipeline Depth: 14 stages (F1, F2, D1, D2, RN, DS, IS, RF, EX, WB, CM)
+
+Throughput (IPC):
+  • Peak IPC: 4.0 (4-wide issue, perfect conditions)
+  • Typical IPC: 1.5-2.5 (with branch mispredictions, cache misses)
+  • Integer workloads: ~2.0 IPC
+  • FP workloads: ~1.8 IPC (longer latencies)
+  • Memory-intensive: ~1.2 IPC (cache misses dominate)
+
+Latencies:
+  • Branch misprediction penalty: 14 cycles (full pipeline flush)
+  • L1 I-cache hit: 2 cycles (F2 stage)
+  • L1 D-cache hit: 3 cycles (LSU execution)
+  • L2 cache hit: 12 cycles
+  • Memory access: 100+ cycles (off-chip DRAM)
+  • Exception handling: 14 cycles (pipeline flush + redirect)
+
+Resource Sizes:
+  • Instruction Queue: 64 entries
+  • Reservation Station: 64 entries (unified)
+  • Reorder Buffer: 64 entries
+  • Physical Register File: 128 registers (32-bit each)
+  • Store Buffer: 16 entries
+  • Load Queue: 16 entries
+
+Issue Width: 4 instructions/cycle (fetch, decode, rename, issue, commit)
+
+Clock Frequency Target: 1.0 GHz @ Sky130 130nm
+
+================================================================================
+PIPELINE EXAMPLE: INSTRUCTION FLOW
+================================================================================
+
+Instruction: ADD x3, x1, x2  (add x1 and x2, store result in x3)
+
+Cycle 1 (F1):  PC generation, BTB lookup
+Cycle 2 (F2):  I-cache access, fetch instruction
+Cycle 3 (D1):  Decode ADD, identify rs1=x1, rs2=x2, rd=x3
+Cycle 4 (D2):  Insert into Instruction Queue
+Cycle 5 (RN):  Rename: x1→p45, x2→p78, allocate p99 for x3, update RAT
+Cycle 6 (DS):  Dispatch to Reservation Station, allocate ROB entry
+Cycle 7 (IS):  Wait for operands (p45, p78), wake-up when ready, issue to ALU
+Cycle 8 (RF):  Read p45 and p78 from Physical Register File
+Cycle 9 (EX):  Execute ADD in Simple ALU (1 cycle latency)
+Cycle 10 (WB): Write result to p99, broadcast on bypass network, update ROB
+Cycle 11 (CM): Check ROB head, commit if at head and no exceptions
+Cycle 12 (CM): Retire instruction, update arch state, return old p3 to Free List
+
+Total latency: 12 cycles (from fetch to commit)
+But with 4-wide issue, sustained throughput is 4 instructions/cycle!
+
+================================================================================
+AUTHOR: Miyamii (Clownfish Architecture Project)
+DATE: November 2025
+VERSION: v2.0 (Out-of-Order 14-Stage Pipeline)
+================================================================================

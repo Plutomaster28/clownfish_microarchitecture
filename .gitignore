@@ -1,0 +1,67 @@
+# OpenLane run directories (contain large intermediate files)
+runs/
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+.DS_Store
+
+# Log files
+*.log
+
+# Waveform dumps (can be very large)
+*.vcd
+*.fst
+*.fsdb
+
+# Compiled simulation files
+*.o
+*.a
+*.so
+simv
+*.daidir/
+csrc/
+
+# Verilator output
+obj_dir/
+verilated/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# OpenRAM large output files (keep configs, ignore generated)
+macros/openram_output/*.sp
+macros/openram_output/*.pex.sp
+macros/openram_output/*.lvs.sp
+macros/openram_output/trimmed.sp
+macros/openram_output/sram.sp
+
+# Keep the essential files for OpenRAM integration
+!macros/openram_output/*.lef
+!macros/openram_output/*.gds
+!macros/openram_output/*.lib
+!macros/openram_output/*.v
+
+# Editor files
+.vscode/
+.idea/
+*.sublime-*
+
+# OS files
+Thumbs.db
+.Trash-*/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/

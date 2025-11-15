@@ -1,0 +1,15 @@
+read_liberty -lib /home/miyamii/.ciel/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+read_verilog -sv /home/miyamii/clownfish_microarchitecture/rtl/execution/mul_div_unit.v
+hierarchy -check -top mul_div_unit
+proc
+opt
+fsm
+opt
+memory
+opt
+techmap
+opt
+dfflibmap -liberty /home/miyamii/.ciel/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+opt_clean -purge
+stat -liberty /home/miyamii/.ciel/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+write_verilog -noattr mul_div_unit_synth.v
